@@ -1,2 +1,2 @@
 # signify
-A program to find the morphological signatures in prefixing languages
+A program to find morphological signatures in prefixing languages
