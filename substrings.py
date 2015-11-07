@@ -8,6 +8,8 @@ import itertools
 from pathlib import Path
 import pprint
 
+import Levenshtein as lev
+
 import dx1
 
 def write_log(corpus_name, path=None):
@@ -148,6 +150,25 @@ def get_all_words(prefixes_to_stems, robust_substrings):
         if word not in emitted_words:
             yield ' '.join(split_word)
             emitted_words.add(word)
+
+def find_subpattern(string1, string2):
+    opcodes = lev.opcodes(string1, string2)
+    opnames = {op[0] for op in opcodes}
+    good_ops = {'replace', 'equal'}
+    if opnames == good_ops:
+        pattern = []
+        for opname, start_index1, end_index1, start_index2, end_index2 in opcodes:
+            if opname == 'equal':
+                substring = string1[start_index1:end_index1]
+                pattern.append(substring)
+            elif opname == 'replace':
+                diff1 = string1[start_index1:end_index1]
+                diff2 = string2[start_index2:end_index2]
+                pattern.append((diff1, diff2))
+        return pattern
+    else:
+        return None
+
 
 def run(data, min_length, verbose=False):
     result = get_all_substrings_words(data, min_length, verbose=verbose)
