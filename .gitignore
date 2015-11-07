@@ -58,3 +58,9 @@ target/
 
 # PyCharm
 .idea/
+
+# output
+*_signatures.txt
+*_substrings.csv
+*_words.txt
+substrings_log_*.txt
