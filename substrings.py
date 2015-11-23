@@ -9,6 +9,7 @@ from pathlib import Path
 import pprint
 
 import Levenshtein as lev
+from regexi import patternize
 
 import dx1
 
@@ -151,16 +152,22 @@ def get_all_words(prefixes_to_stems, robust_substrings):
             yield ' '.join(split_word)
             emitted_words.add(word)
 
-def find_subpattern(string1, string2):
+def find_subpattern(string1, string2, max_replacements=None):
     opcodes = lev.opcodes(string1, string2)
-    opnames = {op[0] for op in opcodes}
+    opnames = [op[0] for op in opcodes]
     good_ops = {'replace', 'equal'}
-    if opnames == good_ops:
+
+    if max_replacements:
+        num_replaces = sum(1 for op in opnames if op == 'replace')
+        if num_replaces > max_replacements:
+            return None
+
+    if set(opnames) == good_ops:
         pattern = []
         for opname, start_index1, end_index1, start_index2, end_index2 in opcodes:
             if opname == 'equal':
                 substring = string1[start_index1:end_index1]
-                pattern.append(substring)
+                pattern.append((substring,))
             elif opname == 'replace':
                 diff1 = string1[start_index1:end_index1]
                 diff2 = string2[start_index2:end_index2]
@@ -169,6 +176,165 @@ def find_subpattern(string1, string2):
     else:
         return None
 
+def compare_pairs(prefixes):
+    done_prefixes = set()
+    compared_prefixes = defaultdict(list)
+    for prefix in prefixes:
+        done_prefixes.add(prefix)
+        for other_prefix in prefixes:
+            if other_prefix not in done_prefixes:
+                pattern = find_subpattern(prefix, other_prefix, max_replacements=1)
+                if pattern:
+                    done_prefixes.add(other_prefix)
+                    compared_prefixes[prefix].append(pattern)
+    return compared_prefixes
+
+def get_all_slots(patterns):
+    for slot in itertools.zip_longest(*patterns):
+        all_but_none = (element for element in slot if element)
+        elements_at_slot = set(itertools.chain.from_iterable(all_but_none))
+        yield elements_at_slot
+
+def split_string(shorter, longer):
+    if len(shorter) > len(longer):
+        return split_string(longer, shorter)
+
+    if shorter[0] != longer[0] and shorter[-1] != longer[-1]:
+        return None
+
+    if shorter in longer:
+        substring = shorter
+    else:
+        common_pattern, _ = patternize.find_pattern((shorter, longer))
+        substring = ''.join(element for element in common_pattern if element)
+
+    try:
+        before_shorter, after_shorter = shorter.split(substring, 1)
+        before_longer, after_longer = longer.split(substring, 1)
+
+        # get the part which is different
+        difference = shorter[len(before_shorter):len(shorter)-len(after_shorter)]
+        split_str = ((before_shorter, before_longer), difference, (after_shorter, after_longer))
+        return split_str
+    except ValueError:
+        # ignore non-consecutive patterns for now
+        return None
+
+
+def parse_slots(slot_sets):
+    # we need to convert it to a list to be able to insert suffixes to later slots
+    slot_sets = list(slot_sets)
+    # new_slot_sets = list(slot_sets)
+
+    something_changed = False
+    combinations = itertools.combinations
+
+    num_slots = len(slot_sets)
+    new_slot_sets = [set() for _ in range(len(slot_sets))]
+    done_affixes = defaultdict(set)
+    current_index = 0
+
+    while current_index < len(slot_sets):
+        current_slot = slot_sets[current_index]
+
+        if len(current_slot) == 1:
+            new_slot_sets[current_index] = current_slot
+        else:
+            slot_combinations = combinations(current_slot, 2)
+
+
+            for element, other_element in slot_combinations:
+
+                if element not in done_affixes[current_index] and other_element not in done_affixes[current_index]:
+                    split_str = split_string(element, other_element)
+
+                    if split_str:
+                        # print(split_str)
+                        # print('something changed')
+                        # something_changed = True
+
+                        substrings_before = set(split_str[0])
+                        difference = split_str[1]
+                        substrings_after = set(split_str[2])
+
+                        for before in substrings_before:
+                            if before:
+                                # insert it into the previous slot
+                                # (create it if it doesn't exist)
+                                if current_index == 0:
+                                    new_slot_sets.insert(0, set())
+
+                                    # increment the current index
+                                    # (we need to do this because we are prepending a slot before this one
+                                    # and we don't want to end up in the same slot on the next iteration)
+                                    current_index += 1
+
+                                    # adjust the number of slots
+                                    num_slots += 1
+                                new_slot_sets[current_index - 1].add(before)
+
+                        new_slot_sets[current_index].add(difference)
+
+                        for after in substrings_after:
+                            if after:
+                                # insert it into the next slot
+                                # (ditto)
+                                if current_index + 1 == len(new_slot_sets):
+                                    new_slot_sets.append(set())
+                                    num_slots += 1
+                                new_slot_sets[current_index + 1].add(after)
+
+                        done_affixes[current_index].add(element)
+                        done_affixes[current_index].add(other_element)
+
+
+                    else:
+                        if element not in done_affixes[current_index]:
+                            new_slot_sets[current_index].add(element)
+                        if other_element not in done_affixes[current_index]:
+                            new_slot_sets[current_index].add(other_element)
+
+        current_index += 1
+
+    #
+    #     slot_set = new_slot_sets[current_index]
+    #     sorted_set = sorted(slot_set, key=len)
+    #
+    #     for element in sorted_set:
+    #         # reverse to find larger compounds
+    #         for larger_element in reversed(sorted_set):
+    #
+    #             split_str = split_string(element, larger_element)
+    #
+    #
+    #     if current_index > 0:
+    #         new_slot_sets[current_index - 1].difference_update(new_slot_sets[current_index])
+    #
+    #     current_index += 1
+    #
+    # # go through it and clean up
+    # for n in range(len(new_slot_sets)):
+    #     new_slot_sets[n].difference_update(elements_to_clean)
+
+    return new_slot_sets, something_changed
+
+def reshuffle_slots(patterns):
+    slot_sets = list(get_all_slots(patterns))
+    print('\nbefore:\n{}'.format(pprint.pformat(slot_sets)))
+    something_changed = True
+    while something_changed:
+        new_slot_sets, something_changed = parse_slots(slot_sets)
+        slot_sets = new_slot_sets
+    return slot_sets
+
+
+def find_primary_slots(prefixes_patterns):
+    just_patterns = itertools.chain.from_iterable(prefixes_patterns.values())
+    primary_to_rest = defaultdict(list)
+    for pattern in just_patterns:
+        primary, *rest = pattern
+        primary_to_rest[primary].append(rest)
+    return primary_to_rest
 
 def run(data, min_length, verbose=False):
     result = get_all_substrings_words(data, min_length, verbose=verbose)
@@ -177,6 +343,14 @@ def run(data, min_length, verbose=False):
     # get all words (and sort them alphabetically)
     all_words = sorted(get_all_words(affixes_to_stems, robust_substrings))
     signatures_stems, signatures_affixes = find_signatures(stems_to_affixes, affixes_to_stems)
+    prefix_patterns = compare_pairs(affixes_to_stems.keys())
+    primary_to_rest = find_primary_slots(prefix_patterns)
+    pprint.pprint(primary_to_rest)
+
+    #     slot_sets = reshuffle_slots(patterns)
+    #
+    #     print('\nafter:\n')
+    #     pprint.pprint(slot_sets)
     return robust_substrings, all_words, signatures_stems, signatures_affixes
 
 def sort_by_size(data: dict, item=1):
