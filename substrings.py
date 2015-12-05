@@ -348,10 +348,10 @@ def get_top_candidate(prefix_element: str, index: int, slots: SlotGrammar,
         robustness_current = slots.get_robustness_ratio(first+second, index)
         mean = (robustness_first + robustness_second) / 2
         if mean > robustness_current:
-            candidate = (first, second), mean
+            candidate = (first, robustness_first), (second, robustness_second), mean
             robustness_scores.append(candidate)
 
-    top_candidate = max(robustness_scores, key=lambda item: item[1])
+    top_candidate = max(robustness_scores, key=lambda item: item[2])
 
     if verbose:
         add_to_log('robustness scores', pprint.pformat(robustness_scores))
@@ -366,8 +366,10 @@ def find_slots(first, others):
 
     # get a list of all others with the initial slot index
     all_others = itertools.chain.from_iterable(others_pairs)
+    first = ((element, 0) for element in first)
+    all_others = ((element, 1) for element in all_others)
     all_together = list(itertools.chain(first, all_others))
-    slots = SlotGrammar.from_elements(all_together, initial=True)
+    slots = SlotGrammar.from_elements(all_together)
 
     add_to_log('others', all_together)
 
@@ -376,11 +378,15 @@ def find_slots(first, others):
         index = current_slot
         this_slot = slots[index]
         if len(this_slot) > 1:
-            for element in sorted(slots[current_slot]):
+            for element in sorted(this_slot):
                 try:
-                    top_pair, score = get_top_candidate(element, index, slots)
+                    one, two, score = get_top_candidate(element, index, slots)
+                    # if they have robustness scores above 0
                     if score:
-                        slots.update_element(element, index, top_pair)
+                        first_part, _ = one
+                        second_part, _ = two
+                        slots.update_element(element, index, (first_part, second_part))
+
                         continue
 
                 except ValueError:
