@@ -1,5 +1,6 @@
 __author__ = 'anton'
 
+import asyncio
 from argparse import ArgumentParser
 from collections import Counter, defaultdict
 import csv
@@ -13,22 +14,137 @@ from regexi import patternize
 
 import dx1
 
-def write_log(corpus_name, path=None):
-    to_log = []
-    def add_to_log(data):
-        if data:
-            to_log.append(data)
-        elif data is None:
-            # write the data
-            for line in to_log:
-                print(line, file=logfile)
-            # close the file
-            logfile.close()
+class SlotGrammar:
+    def __init__(self):
+        self._slots = []
 
+    def __iter__(self):
+        return iter(self._slots)
+
+    def __len__(self):
+        return len(self._slots)
+
+    def __getitem__(self, item):
+        return self._slots[item]
+
+    def __repr__(self):
+        return 'SlotGrammar({})'.format(repr(self._slots))
+
+    def __str__(self):
+        return 'SlotGrammar({})'.format(pprint.pformat(self._slots))
+
+    def add_element(self, element, index):
+        try:
+            self._slots[index].add(element)
+        except IndexError:
+            self._slots.append({element})
+
+    @classmethod
+    def from_elements(cls, elements, initial=False):
+        new_grammar = cls()
+        if initial:
+            elements = ((element, 0) for element in elements)
+        for element, index in elements:
+            new_grammar.add_element(element, index)
+        return new_grammar
+
+    def iterelements(self):
+        for n, slot in enumerate(self):
+            for element in slot:
+                yield element, n
+
+    def find_matches_in_slot(self, string, index, ltr=True):
+        slot = self._slots[index]
+
+        for element in slot:
+            if ltr:
+                if element[:len(string)] == string:
+                   yield element
+            else:
+                raise NotImplementedError('only left-to-right is supported')
+
+    def get_robustness_ratio(self, string: str, index: int) -> float:
+        try:
+            slot_length = len(self._slots[index])
+        except IndexError:
+            # there is nothing there (yet)
+            return 0.0
+
+        slot_matches = self.find_matches_in_slot(string, index)
+        # subtract one to avoid counting this element twice
+        num_matches = sum(1 for _ in slot_matches)
+        match_ratio = num_matches / slot_length
+        robustness = match_ratio * len(string)
+        return robustness
+
+
+    def remove_element(self, element, index):
+        try:
+            self._slots[index].remove(element)
+        except KeyError:
+            pass
+
+    def update_element(self, old_element, index, new_elements):
+        # remove the old element
+        self.remove_element(old_element, index)
+        for n, element in enumerate(new_elements, start=index):
+            # sometimes it's an empty string
+            if element:
+                self.add_element(element, n)
+        self.adjust_matching_elements(new_elements[0], index)
+
+    def adjust_matching_elements(self, string, index):
+        matches = list(self.find_matches_in_slot(string, index))
+        for match in matches:
+            if match != string:
+                remaining = match.split(string, 1)[1]
+                self.remove_element(match, index)
+                self.add_element(remaining, index + 1)
+
+
+    def shift_element_right(self, element, index, positions=1):
+        """
+        shifts an element right by a given number of positions
+        :param element:
+        :param index:
+        :param positions:
+        :return:
+        """
+        # remove it explicitly (failing on KeyError)
+        # to make sure we don't inadvertently insert a new element
+        self._slots[index].remove(element)
+        self.add_element(element, index + positions)
+
+    def update_grammar(self, other):
+        """
+        Update this grammar with the data from another grammar
+        :param other:
+        :return:
+        """
+        for n, slot in enumerate(other):
+            try:
+                self[n].update(slot)
+            except IndexError:
+                self._slots.append(slot)
+
+
+def write_log(corpus_name, path=None):
     if not path:
         path = Path('substrings_log_{}.txt'.format(corpus_name))
 
     logfile = path.open('w')
+    print_p = functools.partial(print, file=logfile)
+    loop = asyncio.get_event_loop()
+    def add_to_log(*args):
+        if args:
+            to_write = ' '.join(pprint.pformat(data) for data in args) + '\n' * 3
+            # write the data
+            loop.run_in_executor(None, print_p, to_write)
+        else:
+            # close the file
+            logfile.close()
+
+
     return add_to_log
 
 def get_substrings(string, min_length=5):
@@ -81,21 +197,10 @@ def get_all_substrings_words(data, min_length, verbose=False):
             if len(only_top_substrings) > 1:
                 top_stems_to_affixes[stem] = only_top_substrings
 
-                if verbose:
-                    add_to_log((stem, top_stems_to_affixes[stem]))
 
                 for affix in only_top_substrings:
                     # add the related stems for every top affix to the affixes to stems dictionary
                     affixes_to_stems[affix].add(stem)
-
-                    if verbose:
-                        add_to_log((affix, affixes_to_stems[affix]))
-
-                        add_to_log('*****\naffixes sharing the same stems\n*****')
-                        add_to_log(find_same_values(top_stems_to_affixes))
-
-                if verbose:
-                    add_to_log('*' * 10)
 
     return common_substrings, top_stems_to_affixes, affixes_to_stems
 
@@ -221,120 +326,79 @@ def split_string(shorter, longer):
         return None
 
 
-def parse_slots(slot_sets):
-    # we need to convert it to a list to be able to insert suffixes to later slots
-    slot_sets = list(slot_sets)
-    # new_slot_sets = list(slot_sets)
-
-    something_changed = False
-    combinations = itertools.combinations
-
-    num_slots = len(slot_sets)
-    new_slot_sets = [set() for _ in range(len(slot_sets))]
-    done_affixes = defaultdict(set)
-    current_index = 0
-
-    while current_index < len(slot_sets):
-        current_slot = slot_sets[current_index]
-
-        if len(current_slot) == 1:
-            new_slot_sets[current_index] = current_slot
-        else:
-            slot_combinations = combinations(current_slot, 2)
-
-
-            for element, other_element in slot_combinations:
-
-                if element not in done_affixes[current_index] and other_element not in done_affixes[current_index]:
-                    split_str = split_string(element, other_element)
-
-                    if split_str:
-                        # print(split_str)
-                        # print('something changed')
-                        # something_changed = True
-
-                        substrings_before = set(split_str[0])
-                        difference = split_str[1]
-                        substrings_after = set(split_str[2])
-
-                        for before in substrings_before:
-                            if before:
-                                # insert it into the previous slot
-                                # (create it if it doesn't exist)
-                                if current_index == 0:
-                                    new_slot_sets.insert(0, set())
-
-                                    # increment the current index
-                                    # (we need to do this because we are prepending a slot before this one
-                                    # and we don't want to end up in the same slot on the next iteration)
-                                    current_index += 1
-
-                                    # adjust the number of slots
-                                    num_slots += 1
-                                new_slot_sets[current_index - 1].add(before)
-
-                        new_slot_sets[current_index].add(difference)
-
-                        for after in substrings_after:
-                            if after:
-                                # insert it into the next slot
-                                # (ditto)
-                                if current_index + 1 == len(new_slot_sets):
-                                    new_slot_sets.append(set())
-                                    num_slots += 1
-                                new_slot_sets[current_index + 1].add(after)
-
-                        done_affixes[current_index].add(element)
-                        done_affixes[current_index].add(other_element)
-
-
-                    else:
-                        if element not in done_affixes[current_index]:
-                            new_slot_sets[current_index].add(element)
-                        if other_element not in done_affixes[current_index]:
-                            new_slot_sets[current_index].add(other_element)
-
-        current_index += 1
-
-    #
-    #     slot_set = new_slot_sets[current_index]
-    #     sorted_set = sorted(slot_set, key=len)
-    #
-    #     for element in sorted_set:
-    #         # reverse to find larger compounds
-    #         for larger_element in reversed(sorted_set):
-    #
-    #             split_str = split_string(element, larger_element)
-    #
-    #
-    #     if current_index > 0:
-    #         new_slot_sets[current_index - 1].difference_update(new_slot_sets[current_index])
-    #
-    #     current_index += 1
-    #
-    # # go through it and clean up
-    # for n in range(len(new_slot_sets)):
-    #     new_slot_sets[n].difference_update(elements_to_clean)
-
-    return new_slot_sets, something_changed
-
-def reshuffle_slots(patterns):
-    slot_sets = list(get_all_slots(patterns))
-    print('\nbefore:\n{}'.format(pprint.pformat(slot_sets)))
-    something_changed = True
-    while something_changed:
-        new_slot_sets, something_changed = parse_slots(slot_sets)
-        slot_sets = new_slot_sets
-    return slot_sets
-
-
-def find_primary_slots(prefixes_patterns):
+def find_first_slots(prefixes_patterns):
     just_patterns = itertools.chain.from_iterable(prefixes_patterns.values())
-    primary_to_rest = defaultdict(list)
+    first_to_rest = defaultdict(list)
     for pattern in just_patterns:
-        primary, *rest = pattern
-        primary_to_rest[primary].append(rest)
-    return primary_to_rest
+        first, *rest = pattern
+        first_to_rest[first].append(rest)
+    return first_to_rest
+
+def get_top_candidate(prefix_element: str, index: int, slots: SlotGrammar,
+                      verbose=False) -> tuple:
+    candidates = get_substrings(prefix_element, min_length=0)
+    # robustness_scores = [(candidate,
+    #                       slots.get_robustness_ratio(candidate[0], index) +
+    #                       slots.get_robustness_ratio(candidate[1], index + 1))
+    #                          for candidate in candidates]
+    robustness_scores = []
+    for first, second in candidates:
+        robustness_first = slots.get_robustness_ratio(first, index)
+        robustness_second = slots.get_robustness_ratio(second, index + 1)
+        robustness_current = slots.get_robustness_ratio(first+second, index)
+        mean = (robustness_first + robustness_second) / 2
+        if mean > robustness_current:
+            candidate = (first, second), mean
+            robustness_scores.append(candidate)
+
+    top_candidate = max(robustness_scores, key=lambda item: item[1])
+
+    if verbose:
+        add_to_log('robustness scores', pprint.pformat(robustness_scores))
+        add_to_log('slot', pprint.pformat(slots[index]))
+        add_to_log('top candidate', top_candidate)
+
+    return top_candidate
+
+
+def find_slots(first, others):
+    others_pairs = itertools.chain.from_iterable(others)
+
+    # get a list of all others with the initial slot index
+    all_others = itertools.chain.from_iterable(others_pairs)
+    all_together = list(itertools.chain(first, all_others))
+    slots = SlotGrammar.from_elements(all_together, initial=True)
+
+    add_to_log('others', all_together)
+
+    current_slot = 0
+    while current_slot < len(slots):
+        index = current_slot
+        this_slot = slots[index]
+        if len(this_slot) > 1:
+            for element in sorted(slots[current_slot]):
+                try:
+                    top_pair, score = get_top_candidate(element, index, slots)
+                    if score:
+                        slots.update_element(element, index, top_pair)
+                        continue
+
+                except ValueError:
+                    pass
+
+            # prevent infinite loop caused by shifting right
+            if not slots[current_slot]:
+                break
+
+        current_slot += 1
+
+    return slots
+
+def find_slots_all(first_to_rest: dict):
+     slots = [find_slots(*item) for item in first_to_rest.items()]
+     pprint.pprint(slots)
+
+
 
 def run(data, min_length, verbose=False):
     result = get_all_substrings_words(data, min_length, verbose=verbose)
@@ -343,15 +407,25 @@ def run(data, min_length, verbose=False):
     # get all words (and sort them alphabetically)
     all_words = sorted(get_all_words(affixes_to_stems, robust_substrings))
     signatures_stems, signatures_affixes = find_signatures(stems_to_affixes, affixes_to_stems)
+    print('found {} prefix strings'.format(len(affixes_to_stems)))
     prefix_patterns = compare_pairs(affixes_to_stems.keys())
-    primary_to_rest = find_primary_slots(prefix_patterns)
-    pprint.pprint(primary_to_rest)
+    first_to_rest = find_first_slots(prefix_patterns)
+    add_to_log(first_to_rest)
+    find_slots_all(first_to_rest)
 
     #     slot_sets = reshuffle_slots(patterns)
     #
     #     print('\nafter:\n')
     #     pprint.pprint(slot_sets)
     return robust_substrings, all_words, signatures_stems, signatures_affixes
+
+# TODO generate alternative grammars from the slots using the first-to-rest dictionary
+# calculate robustness using the original wordlist
+"""TODO: write a function that takes a regular grammar (list of lists or list of sets)
+parses the slots, and generates a grammar
+('a',): [[('lipo', 'kamt')], -> a li po; a l ipo; a lip o; a lipo (4 possibilities)
+perhaps assume non-null elements in the beginning
+write all grammars which would generate each of these sequences of morphemes"""
 
 def sort_by_size(data: dict, item=1):
     sorted_items = sorted(data.items(), key=lambda x: len(x[item]),
