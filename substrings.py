@@ -421,12 +421,15 @@ def find_slots(first, others):
 
 def check_grammar(slot: SlotGrammar, words):
     grammar_score = 0
+    unmatched = []
     for prefix_sequence in slot.generate():
         num_matches = sum(1 for word in words if word.startswith(prefix_sequence))
         if num_matches:
             print('existing prefix: {}'.format(prefix_sequence))
             grammar_score += num_matches
-    return grammar_score
+        else:
+            unmatched.append(prefix_sequence)
+    return grammar_score, unmatched
 
 
 def find_slots_all(first_to_rest: dict):
@@ -460,9 +463,10 @@ def run(data, min_length, verbose=False):
     with ProcessPoolExecutor() as executor:
         grammar_scores = executor.map(check_grammar_p, slots)
 
-    for n, score in enumerate(grammar_scores):
+    for n, (score, unmatched) in enumerate(grammar_scores):
         add_to_log('grammar: {}; score: {}'.format(pprint.pformat(slots[n]._slots),
                                                    score))
+        pprint.pprint(unmatched)
 
     return robust_substrings, all_words, signatures_stems, signatures_affixes
 
