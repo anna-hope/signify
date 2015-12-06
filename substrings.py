@@ -9,6 +9,8 @@ import itertools
 from pathlib import Path
 import pprint
 
+from concurrent.futures import ProcessPoolExecutor
+
 import Levenshtein as lev
 from regexi import patternize
 
@@ -52,6 +54,17 @@ class SlotGrammar:
         for n, slot in enumerate(self):
             for element in slot:
                 yield element, n
+
+    def generate(self):
+        """
+        Generate a 'grammar' based on the current slot information
+        :return:
+        """
+        if not self._slots:
+            raise ValueError('Slot information is missing')
+        product = itertools.product(*self._slots)
+        for slot_sequence in product:
+            yield ''.join(slot_sequence)
 
     def find_matches_in_slot(self, string, index, ltr=True):
         slot = self._slots[index]
@@ -406,13 +419,29 @@ def find_slots(first, others):
 
     return slots
 
+def check_grammar(slot: SlotGrammar, words):
+    grammar_score = 0
+    for prefix_sequence in slot.generate():
+        num_matches = sum(1 for word in words if word.startswith(prefix_sequence))
+        if num_matches:
+            print('existing prefix: {}'.format(prefix_sequence))
+            grammar_score += num_matches
+    return grammar_score
+
+
 def find_slots_all(first_to_rest: dict):
      slots = [find_slots(*item) for item in first_to_rest.items()]
-     pprint.pprint(slots)
      return slots
 
 
 
+# TODO generate alternative grammars from the slots using the first-to-rest dictionary
+# calculate robustness using the original wordlist
+"""TODO: write a function that takes a regular grammar (list of lists or list of sets)
+parses the slots, and generates a grammar
+('a',): [[('lipo', 'kamt')], -> a li po; a l ipo; a lip o; a lipo (4 possibilities)
+perhaps assume non-null elements in the beginning
+write all grammars which would generate each of these sequences of morphemes"""
 def run(data, min_length, verbose=False):
     result = get_all_substrings_words(data, min_length, verbose=verbose)
     robust_substrings, stems_to_affixes, affixes_to_stems = result
@@ -424,21 +453,19 @@ def run(data, min_length, verbose=False):
     prefix_patterns = compare_pairs(affixes_to_stems.keys())
     first_to_rest = find_first_slots(prefix_patterns)
     add_to_log(first_to_rest)
-    find_slots_all(first_to_rest)
+    slots = find_slots_all(first_to_rest)
+    add_to_log(pprint.pformat(slots))
 
-    #     slot_sets = reshuffle_slots(patterns)
-    #
-    #     print('\nafter:\n')
-    #     pprint.pprint(slot_sets)
+    check_grammar_p = functools.partial(check_grammar, words=data)
+    with ProcessPoolExecutor() as executor:
+        grammar_scores = executor.map(check_grammar_p, slots)
+
+    for n, score in enumerate(grammar_scores):
+        add_to_log('grammar: {}; score: {}'.format(pprint.pformat(slots[n]._slots),
+                                                   score))
+
     return robust_substrings, all_words, signatures_stems, signatures_affixes
 
-# TODO generate alternative grammars from the slots using the first-to-rest dictionary
-# calculate robustness using the original wordlist
-"""TODO: write a function that takes a regular grammar (list of lists or list of sets)
-parses the slots, and generates a grammar
-('a',): [[('lipo', 'kamt')], -> a li po; a l ipo; a lip o; a lipo (4 possibilities)
-perhaps assume non-null elements in the beginning
-write all grammars which would generate each of these sequences of morphemes"""
 
 def sort_by_size(data: dict, item=1):
     sorted_items = sorted(data.items(), key=lambda x: len(x[item]),
