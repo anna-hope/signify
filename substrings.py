@@ -68,7 +68,7 @@ class SlotGrammar:
             slot_length = len(self._slots[index])
         except IndexError:
             # there is nothing there (yet)
-            return 0.0
+            return None
 
         slot_matches = self.find_matches_in_slot(string, index)
         # subtract one to avoid counting this element twice
@@ -137,7 +137,7 @@ def write_log(corpus_name, path=None):
     loop = asyncio.get_event_loop()
     def add_to_log(*args):
         if args:
-            to_write = ' '.join(pprint.pformat(data) for data in args) + '\n' * 3
+            to_write = '\n'.join(str(data) for data in args) + '\n'
             # write the data
             loop.run_in_executor(None, print_p, to_write)
         else:
@@ -343,19 +343,21 @@ def get_top_candidate(prefix_element: str, index: int, slots: SlotGrammar,
     #                          for candidate in candidates]
     robustness_scores = []
     for first, second in candidates:
+        robustness_current = slots.get_robustness_ratio(first+second, index)
         robustness_first = slots.get_robustness_ratio(first, index)
         robustness_second = slots.get_robustness_ratio(second, index + 1)
-        robustness_current = slots.get_robustness_ratio(first+second, index)
-        mean = (robustness_first + robustness_second) / 2
-        if mean > robustness_current:
-            candidate = (first, robustness_first), (second, robustness_second), mean
+        # if robustness_second:
+        #     score = (robustness_first + robustness_second) / 2
+        # else:
+        score = robustness_first
+        candidate = (first, robustness_first), (second, robustness_second), score
+        if score > robustness_current:
             robustness_scores.append(candidate)
 
     top_candidate = max(robustness_scores, key=lambda item: item[2])
 
     if verbose:
         add_to_log('robustness scores', pprint.pformat(robustness_scores))
-        add_to_log('slot', pprint.pformat(slots[index]))
         add_to_log('top candidate', top_candidate)
 
     return top_candidate
@@ -371,18 +373,22 @@ def find_slots(first, others):
     all_together = list(itertools.chain(first, all_others))
     slots = SlotGrammar.from_elements(all_together)
 
-    add_to_log('others', all_together)
+    add_to_log('all initial strings', all_together)
 
     current_slot = 0
     while current_slot < len(slots):
         index = current_slot
         this_slot = slots[index]
         if len(this_slot) > 1:
+
+            add_to_log('current slot: {} {}'.format(index, pprint.pformat(this_slot)))
+
             for element in sorted(this_slot):
                 try:
-                    one, two, score = get_top_candidate(element, index, slots)
+                    one, two, score = get_top_candidate(element, index, slots, verbose=True)
                     # if they have robustness scores above 0
                     if score:
+                        add_to_log("'{}' -> '{}' + '{}'".format(element, one, two))
                         first_part, _ = one
                         second_part, _ = two
                         slots.update_element(element, index, (first_part, second_part))
@@ -403,6 +409,7 @@ def find_slots(first, others):
 def find_slots_all(first_to_rest: dict):
      slots = [find_slots(*item) for item in first_to_rest.items()]
      pprint.pprint(slots)
+     return slots
 
 
 
