@@ -14,6 +14,8 @@ from concurrent.futures import ProcessPoolExecutor
 import Levenshtein as lev
 from regexi import patternize
 
+import parser
+
 import dx1
 
 class SlotGrammar:
@@ -37,9 +39,10 @@ class SlotGrammar:
 
     def add_element(self, element, index):
         try:
-            self._slots[index].add(element)
+            # self._slots[index].add(element)
+            self._slots[index][element] += 1
         except IndexError:
-            self._slots.append({element})
+            self._slots.append(Counter([element]))
 
     @classmethod
     def from_elements(cls, elements, initial=False):
@@ -93,7 +96,8 @@ class SlotGrammar:
 
     def remove_element(self, element, index):
         try:
-            self._slots[index].remove(element)
+            # self._slots[index].remove(element)
+            del self._slots[index][element]
         except KeyError:
             pass
 
@@ -125,7 +129,8 @@ class SlotGrammar:
         """
         # remove it explicitly (failing on KeyError)
         # to make sure we don't inadvertently insert a new element
-        self._slots[index].remove(element)
+        # self._slots[index].remove(element)
+        del self._slots[index][element]
         self.add_element(element, index + positions)
 
     def update_grammar(self, other):
@@ -169,32 +174,29 @@ def get_substrings(string, min_length=5):
         yield string[:i], string[i:]
 
     # right to left
-    # for i in reversed(range(min_length, len(string) + 1)):
-    #     yield string[:i], string[i:]
+    for i in reversed(range(min_length, len(string) + 1)):
+        yield string[:i], string[i:]
 
-def get_all_substrings_words(data, min_length, verbose=False):
+def get_all_substrings(data, min_length, verbose=False):
     all_substrings = Counter()
-    stems_to_affixes = defaultdict(set)
-    affixes_to_stems = defaultdict(set)
-
+    left_to_right = defaultdict(set)
     for word in data:
-        substrings = tuple(get_substrings(word, min_length))
-        # good_substrings = (substring for substring in substrings
-        #                    if len(substring) >= min_length)
+        substrings = [get_substrings(word, min_length)]
         all_substrings.update(substring for substring, _ in substrings)
 
         for substring, remaining in substrings:
             if remaining:
-                stems_to_affixes[remaining].add(substring)
+                left_to_right[remaining].add(substring)
 
     substring_scores = Counter({substring: count * len(substring)
                                 for substring, count in all_substrings.items()})
-    common_substrings = substring_scores.most_common(200)
-    top_substrings = {substring for substring, _ in common_substrings}
+    common_substrings = dict(substring_scores.most_common(200))
+    return common_substrings, left_to_right
 
-    top_stems_to_affixes = {}
-
-    for stem, its_substrings in stems_to_affixes.items():
+def get_top_ltr_rtl(common_substrings, left_to_right, verbose=False):
+    top_ltr = defaultdict(set)
+    top_rtl = {}
+    for stem, its_substrings in left_to_right.items():
         # some of the stems might point to no affixes
         if len(its_substrings) > 1:
 
@@ -202,20 +204,20 @@ def get_all_substrings_words(data, min_length, verbose=False):
             # keep only the associated substrings which are frequent enough
             only_top_substrings = []
             for substring in its_substrings:
-                if substring in top_substrings:
+                if substring in common_substrings:
                     only_top_substrings.append(substring)
 
             #
             # if sum(len(substring) for substring in only_top_substrings) > min_length * 3:
             if len(only_top_substrings) > 1:
-                top_stems_to_affixes[stem] = only_top_substrings
+                top_rtl[stem] = only_top_substrings
 
 
                 for affix in only_top_substrings:
                     # add the related stems for every top affix to the affixes to stems dictionary
-                    affixes_to_stems[affix].add(stem)
+                    top_ltr[affix].add(stem)
 
-    return common_substrings, top_stems_to_affixes, affixes_to_stems
+    return top_rtl, top_ltr
 
 def find_same_values(pairs: dict):
     same_values = {}
@@ -241,11 +243,11 @@ def find_same_values(pairs: dict):
 
 
 
-def find_signatures(stems_to_affixes, affixes_to_stems):
+def find_signatures(stems_to_affixes, top_ltr):
     # find stems that share the same affixes
 
     same_stem_affixes = find_same_values(stems_to_affixes)
-    same_affix_stems = find_same_values(affixes_to_stems)
+    same_affix_stems = find_same_values(top_ltr)
 
     return same_stem_affixes, same_affix_stems
 
@@ -386,7 +388,7 @@ def find_slots(first, others):
     all_together = list(itertools.chain(first, all_others))
     slots = SlotGrammar.from_elements(all_together)
 
-    add_to_log('all initial strings', all_together)
+    add_to_log('all initial strings', pprint.pformat(all_together))
 
     current_slot = 0
     while current_slot < len(slots):
@@ -440,35 +442,37 @@ def find_slots_all(first_to_rest: dict):
 
 # TODO generate alternative grammars from the slots using the first-to-rest dictionary
 # calculate robustness using the original wordlist
-"""TODO: write a function that takes a regular grammar (list of lists or list of sets)
-parses the slots, and generates a grammar
-('a',): [[('lipo', 'kamt')], -> a li po; a l ipo; a lip o; a lipo (4 possibilities)
-perhaps assume non-null elements in the beginning
-write all grammars which would generate each of these sequences of morphemes"""
+"""TODO:
+*implement the output function with a column for each slot
+*calculate robustness for each slot slot(length of every element in slot)
+    - the length of element that were taken out with split"""
 def run(data, min_length, verbose=False):
-    result = get_all_substrings_words(data, min_length, verbose=verbose)
-    robust_substrings, stems_to_affixes, affixes_to_stems = result
+    robust_substrings, left_to_right = get_all_substrings(data, min_length)[0]
+    # result = get_top_ltr_rtl(robust_substrings, left_to_right, verbose=verbose)
+    just_substrings = (item[0] for item in robust_substrings)
+    parser.get_initial_parts(just_substrings)
 
-    # get all words (and sort them alphabetically)
-    all_words = sorted(get_all_words(affixes_to_stems, robust_substrings))
-    signatures_stems, signatures_affixes = find_signatures(stems_to_affixes, affixes_to_stems)
-    print('found {} prefix strings'.format(len(affixes_to_stems)))
-    prefix_patterns = compare_pairs(affixes_to_stems.keys())
-    first_to_rest = find_first_slots(prefix_patterns)
-    add_to_log(first_to_rest)
-    slots = find_slots_all(first_to_rest)
-    add_to_log(pprint.pformat(slots))
 
-    check_grammar_p = functools.partial(check_grammar, words=data)
-    with ProcessPoolExecutor() as executor:
-        grammar_scores = executor.map(check_grammar_p, slots)
-
-    for n, (score, unmatched) in enumerate(grammar_scores):
-        add_to_log('grammar: {}; score: {}'.format(pprint.pformat(slots[n]._slots),
-                                                   score))
-        pprint.pprint(unmatched)
-
-    return robust_substrings, all_words, signatures_stems, signatures_affixes
+    # # get all words (and sort them alphabetically)
+    # all_words = sorted(get_all_words(top_ltr, robust_substrings))
+    # signatures_stems, signatures_affixes = find_signatures(stems_to_affixes, top_ltr)
+    # print('found {} prefix strings'.format(len(top_ltr)))
+    # prefix_patterns = compare_pairs(top_ltr.keys())
+    # first_to_rest = find_first_slots(prefix_patterns)
+    # add_to_log(pprint.pformat(first_to_rest))
+    # slots = find_slots_all(first_to_rest)
+    # add_to_log(pprint.pformat(slots))
+    #
+    # check_grammar_p = functools.partial(check_grammar, words=data)
+    # with ProcessPoolExecutor() as executor:
+    #     grammar_scores = executor.map(check_grammar_p, slots)
+    #
+    # for n, (score, unmatched) in enumerate(grammar_scores):
+    #     add_to_log('grammar: {};\nscore: {}'.format(pprint.pformat(slots[n]._slots),
+    #                                                score))
+    #     pprint.pprint(unmatched)
+    #
+    # return robust_substrings, all_words, signatures_stems, signatures_affixes
 
 
 def sort_by_size(data: dict, item=1):
@@ -522,5 +526,5 @@ if __name__ == '__main__':
 
     data = dx1.read_file(data_file)
     result = run(data, args.min_length, args.verbose)
-    output_result(result, corpus_name)
+    # output_result(result, corpus_name)
     add_to_log(None)
