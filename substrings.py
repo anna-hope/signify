@@ -181,7 +181,7 @@ def get_all_substrings(data, min_length, verbose=False):
     all_substrings = Counter()
     left_to_right = defaultdict(set)
     for word in data:
-        substrings = [get_substrings(word, min_length)]
+        substrings = list(get_substrings(word, min_length))
         all_substrings.update(substring for substring, _ in substrings)
 
         for substring, remaining in substrings:
@@ -447,9 +447,10 @@ def find_slots_all(first_to_rest: dict):
 *calculate robustness for each slot slot(length of every element in slot)
     - the length of element that were taken out with split"""
 def run(data, min_length, verbose=False):
-    robust_substrings, left_to_right = get_all_substrings(data, min_length)[0]
+    good_words = [word for word in data if len(word) >= min_length]
+    robust_substrings, left_to_right = get_all_substrings(data, min_length)
     # result = get_top_ltr_rtl(robust_substrings, left_to_right, verbose=verbose)
-    just_substrings = (item[0] for item in robust_substrings)
+    just_substrings = (item[0] for item in robust_substrings.items())
     parser.get_initial_parts(just_substrings)
 
 
