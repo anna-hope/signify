@@ -6,10 +6,12 @@ from collections import Counter, defaultdict
 import csv
 import functools
 import itertools
+import math
 from pathlib import Path
 import pprint
+import statistics
 
-from concurrent.futures import ProcessPoolExecutor
+from enum import Enum
 
 import Levenshtein as lev
 from regexi import patternize
@@ -17,6 +19,58 @@ from regexi import patternize
 import parser
 
 import dx1
+
+class AffixationType(Enum):
+    left = 0
+    right = 1
+
+    @staticmethod
+    def get_affixation_type(substrings_left: Counter, substrings_right: Counter):
+        top_left = substrings_left.most_common(150)
+        just_strings_top_left = (item[0] for item in top_left)
+        distance_ratios_top_left = [lev.ratio(*pair) for pair in
+                                    itertools.combinations(just_strings_top_left, 2)]
+
+        # pprint.pprint(top_left)
+        # pprint.pprint(distance_ratios_top_left)
+        # print('******')
+
+        top_right = substrings_right.most_common(150)
+        # pprint.pprint(top_right)
+
+        just_strings_top_right = (item[0] for item in top_right)
+        distance_ratios_top_right = [lev.ratio(*pair) for pair in
+                                    itertools.combinations(just_strings_top_right, 2)]
+        # pprint.pprint(distance_ratios_top_right)
+
+
+        mean_left = statistics.mean(distance_ratios_top_left)
+        stdev_left = statistics.stdev(distance_ratios_top_left)
+        sum_left = sum(distance_ratios_top_left)
+        high_left = [ratio for ratio in distance_ratios_top_left if ratio > 0.8]
+
+        mean_right = statistics.mean(distance_ratios_top_right)
+        stdev_right = statistics.mean(distance_ratios_top_right)
+        sum_right = sum(distance_ratios_top_right)
+        high_right = [ratio for ratio in distance_ratios_top_right if ratio > 0.8]
+
+        # stdev_top_right = statistics.stdev(item[1] for item in top_right)
+
+        # print('stdev top left: {}, stdev top right: {}'.format(stdev_top_left, stdev_top_right))
+
+        # print('left: mean {}, stdev {}, sum {}, high: {}'.format(
+        #         mean_left, stdev_left, sum_left, len(high_left)))
+        # print('right: mean {}, stdev {}, sum {}, high: {}'.format(
+        #         mean_right, stdev_right, sum_right, len(high_right)))
+
+        if len(high_left) > len(high_right):
+            print('prefixing')
+            return AffixationType.left
+        else:
+            print('suffixing')
+            return AffixationType.right
+
+
 
 class SlotGrammar:
     def __init__(self):
@@ -145,7 +199,6 @@ class SlotGrammar:
             except IndexError:
                 self._slots.append(slot)
 
-
 def write_log(corpus_name, path=None):
     if not path:
         path = Path('substrings_log_{}.txt'.format(corpus_name))
@@ -174,32 +227,44 @@ def get_substrings(string, min_length=5):
         yield string[:i], string[i:]
 
     # right to left
-    for i in reversed(range(min_length, len(string) + 1)):
-        yield string[:i], string[i:]
+    for i in range(min_length, len(string)):
+        yield string[:len(string) - i], string[len(string) - i:]
+
+
 
 def get_all_substrings(data, min_length, verbose=False):
-    all_substrings = Counter()
+    substrings_left = Counter()
+    substrings_right = Counter()
     left_to_right = defaultdict(set)
+    right_to_left = defaultdict(set)
+
     for word in data:
-        substrings = list(get_substrings(word, min_length))
-        all_substrings.update(substring for substring, _ in substrings)
+        substrings = get_substrings(word, min_length)
 
-        for substring, remaining in substrings:
-            if remaining:
-                left_to_right[remaining].add(substring)
+        for left, right in substrings:
+            if left:
+                substrings_left[left] += 1
+                left_to_right[left].add(right)
 
+            if right:
+                substrings_right[right] += 1
+                right_to_left[right].add(left)
+
+
+    return (substrings_left, substrings_right), (left_to_right, right_to_left)
+
+def get_common_substrings(substrings: Counter, n=200) -> dict:
     substring_scores = Counter({substring: count * len(substring)
-                                for substring, count in all_substrings.items()})
-    common_substrings = dict(substring_scores.most_common(200))
-    return common_substrings, left_to_right
+                                for substring, count in substrings.items()})
+    common_substrings = dict(substring_scores.most_common(n))
+    return common_substrings
 
-def get_top_ltr_rtl(common_substrings, left_to_right, verbose=False):
+def get_top_ltr_rtl(common_substrings, right_to_left, verbose=False):
     top_ltr = defaultdict(set)
     top_rtl = {}
-    for stem, its_substrings in left_to_right.items():
+    for stem, its_substrings in right_to_left.items():
         # some of the stems might point to no affixes
         if len(its_substrings) > 1:
-
 
             # keep only the associated substrings which are frequent enough
             only_top_substrings = []
@@ -440,16 +505,27 @@ def find_slots_all(first_to_rest: dict):
 
 
 
-# TODO generate alternative grammars from the slots using the first-to-rest dictionary
-# calculate robustness using the original wordlist
 """TODO:
 *implement the output function with a column for each slot
 *calculate robustness for each slot slot(length of every element in slot)
     - the length of element that were taken out with split"""
 def run(data, min_length, verbose=False):
-    good_words = [word for word in data if len(word) >= min_length]
-    robust_substrings, left_to_right = get_all_substrings(data, min_length)
-    # result = get_top_ltr_rtl(robust_substrings, left_to_right, verbose=verbose)
+    print('{} words'.format(len(data)))
+    mean_word_length = statistics.mean(len(word) for word in data)
+    min_length = math.ceil(mean_word_length / 2)
+    print('min length', min_length)
+    substrings, mappings = get_all_substrings(data, min_length)
+    substrings_left, substrings_right = substrings
+    left_to_right, right_to_left = mappings
+
+    affixation_type = AffixationType.get_affixation_type(substrings_left,
+                                                         substrings_right)
+
+    if affixation_type == AffixationType.left:
+        robust_substrings = get_common_substrings(substrings_left)
+    else:
+        robust_substrings = get_common_substrings(substrings_right)
+
     just_substrings = (item[0] for item in robust_substrings.items())
     parser.get_initial_parts(just_substrings)
 
