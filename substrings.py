@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 __author__ = 'anton'
 
 import asyncio
@@ -14,9 +16,8 @@ import statistics
 from enum import Enum
 
 import Levenshtein as lev
-from regexi import patternize
 
-import parser
+import substring_parser
 
 import dx1
 
@@ -28,8 +29,8 @@ class AffixationType(Enum):
     def get_affixation_type(substrings_left: Counter, substrings_right: Counter):
         top_left = substrings_left.most_common(150)
         just_strings_top_left = (item[0] for item in top_left)
-        distance_ratios_top_left = [lev.ratio(*pair) for pair in
-                                    itertools.combinations(just_strings_top_left, 2)]
+        distance_ratios_top_left = (lev.ratio(*pair) for pair in
+                                    itertools.combinations(just_strings_top_left, 2))
 
         # pprint.pprint(top_left)
         # pprint.pprint(distance_ratios_top_left)
@@ -39,23 +40,22 @@ class AffixationType(Enum):
         # pprint.pprint(top_right)
 
         just_strings_top_right = (item[0] for item in top_right)
-        distance_ratios_top_right = [lev.ratio(*pair) for pair in
-                                    itertools.combinations(just_strings_top_right, 2)]
+        distance_ratios_top_right = (lev.ratio(*pair) for pair in
+                                    itertools.combinations(just_strings_top_right, 2))
         # pprint.pprint(distance_ratios_top_right)
 
 
-        mean_left = statistics.mean(distance_ratios_top_left)
-        stdev_left = statistics.stdev(distance_ratios_top_left)
-        sum_left = sum(distance_ratios_top_left)
-        high_left = [ratio for ratio in distance_ratios_top_left if ratio > 0.8]
+        # mean_left = statistics.mean(distance_ratios_top_left)
+        # stdev_left = statistics.stdev(distance_ratios_top_left)
+        # sum_left = sum(distance_ratios_top_left)
+        high_left = sum(1 for ratio in distance_ratios_top_left if ratio > 0.8)
 
-        mean_right = statistics.mean(distance_ratios_top_right)
-        stdev_right = statistics.mean(distance_ratios_top_right)
-        sum_right = sum(distance_ratios_top_right)
-        high_right = [ratio for ratio in distance_ratios_top_right if ratio > 0.8]
+        # mean_right = statistics.mean(distance_ratios_top_right)
+        # stdev_right = statistics.mean(distance_ratios_top_right)
+        # sum_right = sum(distance_ratios_top_right)
+        high_right = sum(1 for ratio in distance_ratios_top_right if ratio > 0.8)
 
         # stdev_top_right = statistics.stdev(item[1] for item in top_right)
-
         # print('stdev top left: {}, stdev top right: {}'.format(stdev_top_left, stdev_top_right))
 
         # print('left: mean {}, stdev {}, sum {}, high: {}'.format(
@@ -63,7 +63,7 @@ class AffixationType(Enum):
         # print('right: mean {}, stdev {}, sum {}, high: {}'.format(
         #         mean_right, stdev_right, sum_right, len(high_right)))
 
-        if len(high_left) > len(high_right):
+        if high_left > high_right:
             print('prefixing')
             return AffixationType.left
         else:
@@ -253,7 +253,7 @@ def get_all_substrings(data, min_length, verbose=False):
 
     return (substrings_left, substrings_right), (left_to_right, right_to_left)
 
-def get_common_substrings(substrings: Counter, n=200) -> dict:
+def get_common_substrings(substrings: Counter, n: int) -> dict:
     substring_scores = Counter({substring: count * len(substring)
                                 for substring, count in substrings.items()})
     common_substrings = dict(substring_scores.most_common(n))
@@ -380,31 +380,6 @@ def get_all_slots(patterns):
         elements_at_slot = set(itertools.chain.from_iterable(all_but_none))
         yield elements_at_slot
 
-def split_string(shorter, longer):
-    if len(shorter) > len(longer):
-        return split_string(longer, shorter)
-
-    if shorter[0] != longer[0] and shorter[-1] != longer[-1]:
-        return None
-
-    if shorter in longer:
-        substring = shorter
-    else:
-        common_pattern, _ = patternize.find_pattern((shorter, longer))
-        substring = ''.join(element for element in common_pattern if element)
-
-    try:
-        before_shorter, after_shorter = shorter.split(substring, 1)
-        before_longer, after_longer = longer.split(substring, 1)
-
-        # get the part which is different
-        difference = shorter[len(before_shorter):len(shorter)-len(after_shorter)]
-        split_str = ((before_shorter, before_longer), difference, (after_shorter, after_longer))
-        return split_str
-    except ValueError:
-        # ignore non-consecutive patterns for now
-        return None
-
 
 def find_first_slots(prefixes_patterns):
     just_patterns = itertools.chain.from_iterable(prefixes_patterns.values())
@@ -509,47 +484,30 @@ def find_slots_all(first_to_rest: dict):
 *implement the output function with a column for each slot
 *calculate robustness for each slot slot(length of every element in slot)
     - the length of element that were taken out with split"""
-def run(data, min_length, verbose=False):
+def run(data, min_length, num_words, verbose=False):
     print('{} words'.format(len(data)))
     mean_word_length = statistics.mean(len(word) for word in data)
     min_length = math.ceil(mean_word_length / 2)
     print('min length', min_length)
     substrings, mappings = get_all_substrings(data, min_length)
     substrings_left, substrings_right = substrings
+
+    # mappings of string on the left to strings on the right of the word
+    # for a prefixing language,
+    # left to right would mean prefixes (broadly) pointing to roots (broadly)
     left_to_right, right_to_left = mappings
 
     affixation_type = AffixationType.get_affixation_type(substrings_left,
                                                          substrings_right)
 
     if affixation_type == AffixationType.left:
-        robust_substrings = get_common_substrings(substrings_left)
+        robust_substrings = get_common_substrings(substrings_left, num_words)
     else:
-        robust_substrings = get_common_substrings(substrings_right)
+        robust_substrings = get_common_substrings(substrings_right, num_words)
 
-    just_substrings = (item[0] for item in robust_substrings.items())
-    parser.get_initial_parts(just_substrings)
+    just_substrings = [item[0] for item in robust_substrings.items()]
 
-
-    # # get all words (and sort them alphabetically)
-    # all_words = sorted(get_all_words(top_ltr, robust_substrings))
-    # signatures_stems, signatures_affixes = find_signatures(stems_to_affixes, top_ltr)
-    # print('found {} prefix strings'.format(len(top_ltr)))
-    # prefix_patterns = compare_pairs(top_ltr.keys())
-    # first_to_rest = find_first_slots(prefix_patterns)
-    # add_to_log(pprint.pformat(first_to_rest))
-    # slots = find_slots_all(first_to_rest)
-    # add_to_log(pprint.pformat(slots))
-    #
-    # check_grammar_p = functools.partial(check_grammar, words=data)
-    # with ProcessPoolExecutor() as executor:
-    #     grammar_scores = executor.map(check_grammar_p, slots)
-    #
-    # for n, (score, unmatched) in enumerate(grammar_scores):
-    #     add_to_log('grammar: {};\nscore: {}'.format(pprint.pformat(slots[n]._slots),
-    #                                                score))
-    #     pprint.pprint(unmatched)
-    #
-    # return robust_substrings, all_words, signatures_stems, signatures_affixes
+    substring_parser.get_initial_parts(just_substrings)
 
 
 def sort_by_size(data: dict, item=1):
@@ -594,6 +552,8 @@ if __name__ == '__main__':
     arg_parser.add_argument('file', help='dx1 file for input')
     arg_parser.add_argument('--min-length', type=int, default=5,
                             help='minimum substring length')
+    arg_parser.add_argument('--num-words', type=int, default=200,
+                            help='number of most frequently occurring strings to get')
     arg_parser.add_argument('--verbose', action='store_true', help='verbose mode')
     args = arg_parser.parse_args()
 
@@ -602,6 +562,6 @@ if __name__ == '__main__':
     add_to_log = write_log(corpus_name)
 
     data = dx1.read_file(data_file)
-    result = run(data, args.min_length, args.verbose)
+    result = run(data, args.min_length, args.num_words, args.verbose)
     # output_result(result, corpus_name)
     add_to_log(None)
