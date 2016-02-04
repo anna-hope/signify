@@ -62,6 +62,7 @@ class AffixationType(Enum):
         #         mean_left, stdev_left, sum_left, len(high_left)))
         # print('right: mean {}, stdev {}, sum {}, high: {}'.format(
         #         mean_right, stdev_right, sum_right, len(high_right)))
+        print('left: {}; right: {}'.format(high_left, high_right))
 
         if high_left > high_right:
             print('prefixing')
