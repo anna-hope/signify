@@ -1,4 +1,5 @@
 import pprint
+import sys
 
 from argparse import ArgumentParser
 from collections import Counter
@@ -134,37 +135,61 @@ class LetterTree:
             yield from self.find_sequence_nodes(node_obj.children, new_sequence,
                                                 node_obj.count, min_count=min_count,
                                                 last_sequence=last_sequence)
+    @staticmethod
+    def join_with_none(seq):
+        try:
+            joined = ''.join(seq)
+        except TypeError:
+            joined = ''.join(seq[:-1]) + '###'
+        return joined
 
     def find_sequences(self, min_count=2):
         for char, (predecessors, successors) in self.root.items():
             predecessor_seqs = self.find_sequence_nodes(predecessors, min_count=min_count)
-            predecessor_seqs = [(count, ''.join(seq)[::-1]) for count, seq in predecessor_seqs
-                                if count and seq[-1]]
+            # predecessor_seqs = ((count, self.join_with_none(seq)) for count, seq in predecessor_seqs
+            #                     if count)
 
             successor_seqs = self.find_sequence_nodes(successors, min_count=min_count)
-            successor_seqs = [(count, ''.join(seq)) for count, seq in successor_seqs
-                              if count and seq[-1]]
+            # successor_seqs = ((count, self.join_with_none(seq)) for count, seq in successor_seqs
+            #                   if count)
             yield char, predecessor_seqs, successor_seqs
+
+def prepare_for_output(char, child_sequences):
+    for count, cs in child_sequences:
+        yield char + LetterTree.join_with_none(cs), count
+
+def just_output(char, predecessors, successors):
+    if predecessors or successors:
+        print(char)
+        if predecessors:
+            pred_output = prepare_for_output(char, predecessors)
+            predecessor_c = Counter({item[::-1]: count for item, count in pred_output})
+            print('predecessors\n', pprint.pformat(predecessor_c.most_common()))
+        if successors:
+            succ_output = prepare_for_output(char, successors)
+            successor_c = Counter({item: count for item, count in succ_output})
+            print('successors\n', pprint.pformat(successor_c.most_common()))
+        print('*' * 5)
 
 
 def run_lt(strings, min_count):
     lt = LetterTree()
     total_strings = len(strings)
     for n, s in enumerate(strings):
-        print('{:.2%}'.format((n + 1)/total_strings))
+        print('\r', end='')
+        print('{:.2%}'.format((n + 1)/total_strings), end='')
+        sys.stdout.flush()
         lt.insert_string(s)
+
+    print()
     # lt.pretty_print()
     seqs = lt.find_sequences(min_count=min_count)
-    for char, predecessors, successors in seqs:
-        if predecessors or successors:
-            print(char)
-            if predecessors:
-                predecessor_c = Counter({item: count for count, item in predecessors})
-                print('predecessors\n', pprint.pformat(predecessor_c.most_common(10)))
-            if successors:
-                successor_c = Counter({item: count for count, item in successors})
-                print('successors\n', pprint.pformat(successor_c.most_common(10)))
-            print('*' * 5)
+
+    sorted_seqs = sorted(seqs, key=lambda item: item[0])
+    for char, predecessors, successors in sorted_seqs:
+        just_output(char, predecessors, successors)
+
+
 
 if __name__ == '__main__':
     arg_parser = ArgumentParser()
