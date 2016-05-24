@@ -1,3 +1,4 @@
+import pickle
 import pprint
 import sys
 
@@ -5,7 +6,6 @@ from argparse import ArgumentParser
 from collections import Counter
 from enum import IntEnum
 
-import dx1
 
 class TraversalMode(IntEnum):
     predecessors = 0
@@ -39,10 +39,11 @@ class LetterTree:
 
 
 
-    def update_node(self, node: dict, children, mode: TraversalMode):
+    def update_node(self, node: dict, children, mode: TraversalMode, verbose=False):
         current_node = node[mode]
         for n, character in enumerate(children):
             if n > 0:
+
                 # after the first node, initialise the TreeNode children
                 # we need this bcus TreeNode children are originally initialised to None
                 # while the first node in every iteration is the seed letter
@@ -57,9 +58,13 @@ class LetterTree:
                 current_node[character].count += 1
             else:
                 current_node[character] = TreeNode(character)
+
+            if verbose:
+                print(current_node)
+
             current_node = current_node[character]
 
-    def update_splits(self, splits):
+    def update_splits(self, splits, verbose=False):
         for char, predecessors, successors in splits:
             # print(char, predecessors, successors)
             if char in self.root:
@@ -67,8 +72,18 @@ class LetterTree:
             else:
                 self.root[char] = {}, {}
                 current_node = self.root[char]
-            self.update_node(current_node, predecessors, TraversalMode.predecessors)
-            self.update_node(current_node, successors, TraversalMode.successors)
+
+            if verbose:
+                print('predecessors')
+
+            # self.update_node(current_node, predecessors, TraversalMode.predecessors,
+            #                  verbose=verbose)
+
+            if verbose:
+                print('successors')
+
+            self.update_node(current_node, successors, TraversalMode.successors,
+                             verbose=verbose)
 
     @staticmethod
     def split_string(s):
@@ -93,10 +108,10 @@ class LetterTree:
             yield current_char
             predecessors.append(char)
 
-    def insert_string(self, s):
+    def insert_string(self, s, verbose=False):
         if s not in self.stored_strings:
             splits = self.split_string(s)
-            self.update_splits(splits)
+            self.update_splits(splits, verbose=verbose)
             self.stored_strings.add(s)
 
     def find_sequence_nodes(self, current_node, current_sequence=(), current_count=0, min_count=0,
@@ -117,6 +132,7 @@ class LetterTree:
                 # to the next character
                 # print('below minimum; yielding', current_sequence)
                 if current_sequence != last_sequence:
+                    # yield current_count, current_sequence
                     yield current_count, current_sequence
                     last_sequence = current_sequence
                 continue
@@ -171,23 +187,43 @@ def just_output(char, predecessors, successors):
             print('successors\n', pprint.pformat(successor_c.most_common()))
         print('*' * 5)
 
-
-def run_lt(strings, min_count):
+def get_sequences(strings, min_count, verbose=False):
     lt = LetterTree()
     total_strings = len(strings)
     for n, s in enumerate(strings):
         print('\r', end='')
         print('{:.2%}'.format((n + 1)/total_strings), end='')
         sys.stdout.flush()
-        lt.insert_string(s)
+        lt.insert_string(s, verbose=verbose)
 
     print()
     # lt.pretty_print()
     seqs = lt.find_sequences(min_count=min_count)
+    return seqs
 
-    sorted_seqs = sorted(seqs, key=lambda item: item[0])
+def output_sequences(sequences):
+    sorted_seqs = sorted(sequences, key=lambda item: item[0])
     for char, predecessors, successors in sorted_seqs:
         just_output(char, predecessors, successors)
+
+
+
+def run_lt(strings, min_count, verbose=False):
+    seqs = get_sequences(strings, min_count, verbose=False)
+    output_sequences(seqs)
+
+def run_ngrams(tokens_fp, min_count, verbose=False):
+    """
+    Run with string tokens instead of characters.
+    :param tokens_fp: path to a binary object with string tokens
+    :param min_count: minimum n-gram count to include in the output
+    :param verbose: trigger verbose mode
+    :return:
+    """
+    with open(tokens_fp, 'rb') as tokens_file:
+        tokens = pickle.load(tokens_file)
+
+    run_lt(tokens, min_count, verbose=verbose)
 
 
 
@@ -196,7 +232,7 @@ if __name__ == '__main__':
     arg_parser.add_argument('file', help='dx1 file with strings')
     arg_parser.add_argument('--min-count', type=int, default=5)
     args = arg_parser.parse_args()
-
+    import dx1
     strings = dx1.read_file(args.file)
     run_lt(strings, args.min_count)
 
